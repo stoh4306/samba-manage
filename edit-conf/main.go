@@ -2,18 +2,41 @@ package main
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 )
+
+var logger = logrus.New()
 
 func main() {
 	fmt.Println("*******************************")
 	fmt.Println(" M2M-STORAGE MANAGEMENT S/W")
 	fmt.Println("*******************************")
 
-	smb_conf_path := os.Args[1]
+	//---------------------------------------
+	// Comand-line test
+	//---------------------------------------
+	//smb_conf_path := os.Args[1]
+	//test(smb_conf_path)
 
+	router := gin.New()
+	router.Use(gin.Logger())
+
+	basePath := "/storage/"
+
+	router.POST(basePath+"/create", createSharedStorage)
+	router.POST(basePath+"/delete", deleteSharedStorage)
+	router.POST(basePath+"/quota/set", setQuota)
+	router.POST(basePath+"/quota/get", getQuota)
+	router.POST(basePath+"/user/set", setUser)
+
+	router.Run(":8080")
+}
+
+func test(smbconfpath string) {
 	// Read smb.share.conf
-	shareFolder, err := read_smb_conf_file(smb_conf_path)
+	shareFolder, err := read_smb_conf_file(smbconfpath)
 	if err != nil {
 		fmt.Println(err)
 		return

@@ -43,6 +43,12 @@ func removeElement(name string, array []string) []string {
 	return array
 }
 
+//func (sfa *ShareFolderArray) addShareFolder(sf ShareFolder) error {
+//	shareId := -1
+//
+//	// TODO
+//}
+
 func (sfa *ShareFolderArray) addToReadList(username string, shareName string) error {
 	shareId := -1
 
