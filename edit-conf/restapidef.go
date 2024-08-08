@@ -95,7 +95,7 @@ func createSharedStorage(c *gin.Context) {
 	// Set quota
 	err = exec.Command("zfs", "set", "quota="+cr.Quota, shareFolderPath).Run()
 	if err != nil {
-		exec.Command("zfs", "destroy", shareFolderPath).Run()
+		exec.Command("zfs", "destroy", "-f", shareFolderPath).Run()
 
 		c.IndentedJSON(http.StatusInternalServerError,
 			SimpleResponse{"Failed to set quota : " + cr.StorageName})
@@ -103,16 +103,43 @@ func createSharedStorage(c *gin.Context) {
 	}
 
 	// Edit smb.share.conf
-	shareFolder, err := read_smb_conf_file(smb_conf_file)
+	var newShareFolder ShareFolder
+	newShareFolder.name = cr.StorageName
+	newShareFolder.folder_path = "/" + shareFolderPath
+	newShareFolder.browsable = true
+	newShareFolder.writable = true
+	newShareFolder.valid_users = append(newShareFolder.valid_users, cr.UserId)
+	newShareFolder.write_list = append(newShareFolder.write_list, cr.UserId)
+	newShareFolder.create_mask = "0777"
+	newShareFolder.directory_mask = "0777"
+
+	err = shareFolderArray_.addNewShareFolder(newShareFolder)
 	if err != nil {
+		exec.Command("zfs", "destroy", "-f", shareFolderPath).Run()
+
 		c.IndentedJSON(http.StatusInternalServerError,
 			SimpleResponse{"Failed to change samba configuration"})
 		return
 	}
 
-	// Create a share folder array and set
-	var sfa ShareFolderArray
-	sfa.shareFolders = shareFolder
+	err = shareFolderArray_.exportShareFolderData(smb_conf_file)
+	if err != nil {
+		exec.Command("zfs", "destroy", "-f", shareFolderPath).Run()
+
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to save the modified samba configuration"})
+		return
+	}
+
+	// Apply the new samba configuration
+	err = exec.Command("smbcontrol", "all", "reload-config").Run()
+	if err != nil {
+		exec.Command("zfs", "destroy", "-f", shareFolderPath).Run()
+
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to update the samba configuration"})
+		return
+	}
 
 	c.IndentedJSON(http.StatusOK, SimpleResponse{"Successfully create a shared folder : " + cr.StorageName + "," + cr.Quota})
 }
@@ -155,10 +182,34 @@ func deleteSharedStorage(c *gin.Context) {
 	}
 
 	shareFolderPath := r.RootPath + "/" + r.UserID + "_" + r.Domain + "/" + r.StorageName
-	err := exec.Command("zfs", "destroy", shareFolderPath).Run()
+	output, err := exec.Command("zfs", "destroy", "-f", shareFolderPath).Output()
 	if err != nil {
 		c.IndentedJSON(http.StatusInternalServerError,
-			SimpleResponse{"Failed to delete " + r.StorageName + ", " + err.Error()})
+			SimpleResponse{"Failed to delete " + shareFolderPath + ", " + string(output)})
+		return
+	}
+
+	// Update samba configuration
+	err = shareFolderArray_.deleteShareFolder(r.StorageName)
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to update samba configuration" + r.StorageName + ", " + err.Error()})
+		return
+	}
+
+	// Export the configuration to disk
+	err = shareFolderArray_.exportShareFolderData(smb_conf_file)
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to save the modified samba configuration"})
+		return
+	}
+
+	// Apply the new samba configuration
+	err = exec.Command("smbcontrol", "all", "reload-config").Run()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to update the samba configuration"})
 		return
 	}
 
@@ -181,8 +232,6 @@ func setQuota(c *gin.Context) {
 	shareFolderPath := r.RootPath + "/" + r.UserId + "_" + r.Domain + "/" + r.StorageName
 	err := exec.Command("zfs", "set", "quota="+r.Quota, shareFolderPath).Run()
 	if err != nil {
-		exec.Command("zfs", "destroy", shareFolderPath).Run()
-
 		c.IndentedJSON(http.StatusInternalServerError,
 			SimpleResponse{"Failed to set quota : " + r.StorageName + "," + err.Error()})
 		return
@@ -257,5 +306,53 @@ func setUser(c *gin.Context) {
 		return
 	}
 
-	read_smb_conf_file(smb_conf_file)
+	// Change shareFolderArray data
+	p := strings.ToUpper(r.Privilege)
+
+	if p == "RO" || p == "RW" {
+		err := shareFolderArray_.addToValidUsers(r.UserID, r.StorageName)
+		if err != nil {
+			c.IndentedJSON(http.StatusInternalServerError,
+				SimpleResponse{"Failed to add user to valid users : " + r.UserID + ", " + r.StorageName})
+			return
+		}
+
+		if p == "RO" {
+			shareFolderArray_.addToReadList(r.UserID, r.StorageName)
+		} else { //if r.Privilege == "RW"
+			shareFolderArray_.addToWriteList(r.UserID, r.StorageName)
+		}
+	} else if p == "NA" {
+		err := shareFolderArray_.addToInValidUsers(r.UserID, r.StorageName)
+		if err != nil {
+			c.IndentedJSON(http.StatusInternalServerError,
+				SimpleResponse{"Failed to add user to invalid users : " + r.UserID + ", " + r.StorageName})
+			return
+		}
+
+		shareFolderArray_.deleteFromReadList(r.UserID, r.StorageName)
+		shareFolderArray_.deleteFromWriteList(r.UserID, r.StorageName)
+	} else {
+		c.IndentedJSON(http.StatusBadRequest,
+			SimpleResponse{"Unknown privilege : " + p})
+		return
+	}
+
+	// Export the new shareFolderArray to disk
+	err := shareFolderArray_.exportShareFolderData(smb_conf_file)
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to save the modified samba configuration"})
+		return
+	}
+
+	// Apply the new samba configuration
+	err = exec.Command("smbcontrol", "all", "reload-config").Run()
+	if err != nil {
+		c.IndentedJSON(http.StatusInternalServerError,
+			SimpleResponse{"Failed to update the samba configuration"})
+		return
+	}
+
+	c.IndentedJSON(http.StatusOK, SimpleResponse{"Successfully set privilege : " + r.UserID + ", " + p})
 }

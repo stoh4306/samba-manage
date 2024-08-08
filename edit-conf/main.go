@@ -9,6 +9,8 @@ import (
 
 var logger = logrus.New()
 
+var shareFolderArray_ ShareFolderArray
+
 func main() {
 	fmt.Println("*******************************")
 	fmt.Println(" M2M-STORAGE MANAGEMENT S/W")
@@ -20,6 +22,16 @@ func main() {
 	//smb_conf_path := os.Args[1]
 	//test(smb_conf_path)
 
+	// Load smb.share.conf first
+	shareFolders, err := read_smb_conf_file(smb_conf_file)
+	if err != nil {
+		logger.Error("Failed to read samba conf file : " + smb_conf_file)
+		return
+	}
+
+	shareFolderArray_.shareFolders = shareFolders
+
+	// For serving rest apis
 	router := gin.New()
 	router.Use(gin.Logger())
 

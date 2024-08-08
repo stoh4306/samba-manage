@@ -43,11 +43,33 @@ func removeElement(name string, array []string) []string {
 	return array
 }
 
-//func (sfa *ShareFolderArray) addShareFolder(sf ShareFolder) error {
-//	shareId := -1
-//
-//	// TODO
-//}
+func (sfa *ShareFolderArray) addNewShareFolder(sf ShareFolder) error {
+	for _, share := range sfa.shareFolders {
+		if share.name == sf.name {
+			return errors.New("A share folder with the same name already exists: " + sf.name)
+		}
+	}
+
+	sfa.shareFolders = append(sfa.shareFolders, sf)
+
+	return nil
+}
+
+func (sfa *ShareFolderArray) deleteShareFolder(shareName string) error {
+	index := -1
+	for i, share := range sfa.shareFolders {
+		if share.name == shareName {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return errors.New("no such share folder exists")
+	} else {
+		sfa.shareFolders = append(sfa.shareFolders[:index], sfa.shareFolders[index+1:]...)
+		return nil
+	}
+}
 
 func (sfa *ShareFolderArray) addToReadList(username string, shareName string) error {
 	shareId := -1
@@ -74,6 +96,30 @@ func (sfa *ShareFolderArray) addToReadList(username string, shareName string) er
 	return nil
 }
 
+func (sfa *ShareFolderArray) deleteFromReadList(username string, shareName string) error {
+	shareId := -1
+
+	for id, shareFolder := range sfa.shareFolders {
+		if shareFolder.name == shareName {
+			shareId = id
+			break
+		}
+	}
+
+	if shareId < 0 {
+		return errors.New("deleteFromReadList(): can't find share folder with name : " + shareName)
+	}
+
+	shareFolder := &(sfa.shareFolders)[shareId]
+	if isElement(username, shareFolder.read_list) < 0 {
+		return errors.New("deleteFromReadList(): " + username + " is not in the read list")
+	}
+
+	shareFolder.read_list = removeElement(username, shareFolder.read_list)
+
+	return nil
+}
+
 func (sfa *ShareFolderArray) addToWriteList(username string, shareName string) error {
 	shareId := -1
 
@@ -95,6 +141,30 @@ func (sfa *ShareFolderArray) addToWriteList(username string, shareName string) e
 
 	shareFolder.write_list = addElement(username, shareFolder.write_list)
 	shareFolder.read_list = removeElement(username, shareFolder.read_list)
+
+	return nil
+}
+
+func (sfa *ShareFolderArray) deleteFromWriteList(username string, shareName string) error {
+	shareId := -1
+
+	for id, shareFolder := range sfa.shareFolders {
+		if shareFolder.name == shareName {
+			shareId = id
+			break
+		}
+	}
+
+	if shareId < 0 {
+		return errors.New("deleteFromWriteList(): can't find share folder with name : " + shareName)
+	}
+
+	shareFolder := &(sfa.shareFolders)[shareId]
+	if isElement(username, shareFolder.write_list) < 0 {
+		return errors.New("deleteFromWriteList(): " + username + " is not in the write list")
+	}
+
+	shareFolder.write_list = removeElement(username, shareFolder.write_list)
 
 	return nil
 }
@@ -142,11 +212,12 @@ func (sfa *ShareFolderArray) addToInValidUsers(username string, shareName string
 }
 
 func (sfa *ShareFolderArray) exportShareFolderData(path string) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 
+	//logger.Info("exporting..." + strconv.Itoa(len(sfa.shareFolders)))
 	for _, share := range sfa.shareFolders {
 		file.WriteString(share.writeToString())
 	}
@@ -206,6 +277,12 @@ func read_smb_conf_file(smb_conf_path string) ([]ShareFolder, error) {
 
 	data, err := io.ReadAll(file)
 	if err != nil {
+		return shareFolders, err
+	}
+
+	err = file.Close()
+	if err != nil {
+		fmt.Println("Can't close file : ", smb_conf_path)
 		return shareFolders, err
 	}
 
@@ -338,12 +415,6 @@ func read_smb_conf_file(smb_conf_path string) ([]ShareFolder, error) {
 			return shareFolders, errors.New("uknown share folder attribute : " + key)
 		}
 
-	}
-
-	err = file.Close()
-	if err != nil {
-		fmt.Println("Can't close file : ", smb_conf_path)
-		return shareFolders, err
 	}
 
 	return shareFolders, err
